@@ -12,21 +12,20 @@ import org.json.JSONObject
 import java.io.File
 import java.security.MessageDigest
 
-/**
- * In-app updates from a Telegram channel: the newest APK is pinned in the channel, the bot reads the pinned message.
- * Android always shows its own "Update" confirmation; the new APK installs OVER the old one (same package + same signing key).
- */
 object Updater {
-    @Volatile var listener: ((Int, String) -> Unit)? = null // install result -> UI (status, message)
+    @Volatile var listener: ((Int, String) -> Unit)? = null
 
-    fun configured(): Boolean = BuildConfig.TG_BOT_TOKEN.isNotEmpty() && BuildConfig.TG_CHAT_ID.isNotEmpty()
+    // Token va Kanal to'g'ridan-to'g'ri shu yerda:
+    private const val BOT_TOKEN = "9217162188:AAEbQ4r6Y2QRgzxKaBAlCgkcaA7DUfYVNbc"
+    private const val CHAT_ID = "@MANGOENERGY_APK"
+
+    fun configured(): Boolean = BOT_TOKEN.isNotEmpty() && CHAT_ID.isNotEmpty()
     fun installed(): String = BuildConfig.VERSION_NAME.substringBefore('-')
 
-    /** {available, version, current, size, optional, link, error} - also cached in Store("updInfo") for the background notice. */
     fun check(ctx: Context): JSONObject {
         val out = JSONObject().put("available", false).put("current", installed())
         if (!configured()) return out.put("error", "off")
-        val (info, err) = UpdCore.latest(BuildConfig.TG_BOT_TOKEN, BuildConfig.TG_CHAT_ID)
+        val (info, err) = UpdCore.latest(BOT_TOKEN, CHAT_ID)
         if (err != null) return out.put("error", err)
         if (info == null || UpdCore.cmp(info.version, installed()) <= 0) { Store.set(ctx, "updInfo", ""); return out }
         val j = JSONObject().put("available", true).put("current", installed()).put("version", info.version).put("fileId", info.fileId)
@@ -43,7 +42,6 @@ object Updater {
         else (info.signatures ?: emptyArray()).map { sha(it.toByteArray()) }.toSet()
     }
 
-    /** Checks the downloaded file really is a newer build of this app, signed with the same key. Returns an error text or null. */
     @Suppress("DEPRECATION")
     fun verify(ctx: Context, f: File): String? {
         val pm = ctx.packageManager
@@ -59,7 +57,6 @@ object Updater {
         return null
     }
 
-    /** Download -> verify -> hand to the system installer. Returns {stage: "installing"|"perm"|"error", msg}. */
     fun downloadAndInstall(ctx: Context, progress: (Int) -> Unit): JSONObject {
         fun res(stage: String, msg: String = "") = JSONObject().put("stage", stage).put("msg", msg)
         if (!configured()) return res("error", "off")
@@ -67,12 +64,12 @@ object Updater {
             try { ctx.startActivity(Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES, Uri.parse("package:${ctx.packageName}")).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)) } catch (e: Exception) { /* ignore */ }
             return res("perm")
         }
-        val (info, err) = UpdCore.latest(BuildConfig.TG_BOT_TOKEN, BuildConfig.TG_CHAT_ID)
+        val (info, err) = UpdCore.latest(BOT_TOKEN, CHAT_ID)
         if (err != null) return res("error", err)
         if (info == null || UpdCore.cmp(info.version, installed()) <= 0) return res("error", "no_update")
         val dir = File(ctx.cacheDir, "updates"); dir.mkdirs(); dir.listFiles()?.forEach { it.delete() }
         val f = File(dir, "mango-${info.version}.apk")
-        val e = UpdCore.download(BuildConfig.TG_BOT_TOKEN, info.fileId, f, info.size, progress)
+        val e = UpdCore.download(BOT_TOKEN, info.fileId, f, info.size, progress)
         if (e != null) return res("error", e)
         val v = verify(ctx, f); if (v != null) { f.delete(); return res("error", v) }
         return try { install(ctx, f); res("installing") } catch (ex: Exception) { res("error", ex.message ?: "install") }
@@ -92,7 +89,6 @@ object Updater {
         }
     }
 
-    /** Background worker: returns the version to announce once (null if nothing new or already announced). */
     fun noticeOnce(ctx: Context): String? {
         val j = check(ctx); if (!j.optBoolean("available")) return null
         val v = j.optString("version"); if (Store.get(ctx, "updNotified") == v) return null
